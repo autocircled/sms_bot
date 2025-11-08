@@ -3,7 +3,8 @@ import requests
 import asyncio
 import random
 import json
-import time
+# import time
+import sys
 import os
 
 API_KEY = 'd4ff8ce1-9792-4c91-ab69-fb1139b2c0f2'
@@ -64,25 +65,31 @@ async def automation_choise(page, phone_number):
 
 async def start_automation(proxies):
     if proxies:
-        raw_proxy = random.choice(proxies)
-        proxy_arr = raw_proxy.split(':')
+        rand = random.choice(range(1, 100))
         proxy = {
-            "server":f'{proxy_arr[0]}:{proxy_arr[1]}',
-            "username":proxy_arr[2],
-            "password":proxy_arr[3],
+            "server":'p.webshare.io:80',
+            "username":f'9zngMBKFJQQ2Rg8V-{rand}',
+            "password":'k6JurP73ejm23UwEK9SM4kH',
         }
         print(proxy)
 
-    phone_number = get_number(170, 344)
+    phone_number = get_number(181, 427)
     # print(phone_number)
     # return
     # phone_number = '8801774698525'
     async with async_playwright() as p:
-        browser = await p.firefox.launch(
-            headless=False,
-            slow_mo=5000,
-            proxy=proxy
-        )
+        if proxies:
+            browser = await p.firefox.launch(
+                headless=False,
+                slow_mo=5000,
+                proxy=proxy
+            )
+        else:
+            browser = await p.firefox.launch(
+                headless=False,
+                slow_mo=5000
+            )
+
         context = await browser.new_context()
         page = await context.new_page()
         
@@ -111,11 +118,12 @@ async def get_proxies():
     
     return data['proxies']
 
-if __name__ == '__main__':
+if __name__ == '__main__':    
+    # print(sys.argv)
     fetch_updated_country_codes()
+
+    proxies = asyncio.run(get_proxies()) if 'vpn' in sys.argv else None    
     while True:
-        proxies = asyncio.run(get_proxies())
         asyncio.run(start_automation(proxies))
         # time.sleep(2)
-        
-    
+
