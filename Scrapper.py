@@ -7,14 +7,10 @@ import argparse
 from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright, BrowserContext, Page
 
-# Webshare Default Configurations (fallback if data/proxies.json is not present)
-DEFAULT_PROXY_SERVER = "http://p.webshare.io:80"
-DEFAULT_PROXY_USER_BASE = "mukul123456"
-DEFAULT_PROXY_PASS = "AB123ab1234"
-
 # Default files
 DEFAULT_URLS_FILE = "urls.txt"
 DEFAULT_OUTPUT_FILE = "scraped_jobs.json"
+DEFAULT_PROXIES_FILE = "data/proxies.json"
 
 # Stealth script injected before any web page scripts execute
 STEALTH_INIT_SCRIPT = """
@@ -105,8 +101,8 @@ def parse_proxy_string(proxy_str: str) -> Dict[str, str]:
         raise ValueError(f"Invalid proxy format: {proxy_str}. Expected host:port:user:pass")
 
 
-def load_proxy_from_file(filepath: str = "data/proxies.json") -> Optional[Dict[str, str]]:
-    """Loads a proxy from the proxies.json file if available."""
+def load_proxy_from_file(filepath: str = DEFAULT_PROXIES_FILE) -> Optional[Dict[str, str]]:
+    """Loads a proxy from a JSON file if available."""
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -120,22 +116,30 @@ def load_proxy_from_file(filepath: str = "data/proxies.json") -> Optional[Dict[s
     return None
 
 
-def get_webshare_proxy(rotate: bool = True) -> Dict[str, str]:
+def get_webshare_proxy() -> Optional[Dict[str, str]]:
     """
-    Returns a Webshare proxy configuration dictionary for Playwright.
-    Prioritizes data/proxies.json; falls back to rotating sub-user credentials.
+    Returns proxy configuration.
+    Priority:
+    1. Local data/proxies.json file
+    2. Environment variables PROXY_SERVER, PROXY_USER, PROXY_PASS
+    3. Returns None if unconfigured (direct connection)
     """
     file_proxy = load_proxy_from_file()
     if file_proxy:
         return file_proxy
 
-    # Fallback to direct credentials with random port/sub-user index
-    sub_user = f"{DEFAULT_PROXY_USER_BASE}-{random.randint(1, 100)}" if rotate else DEFAULT_PROXY_USER_BASE
-    return {
-        "server": DEFAULT_PROXY_SERVER,
-        "username": sub_user,
-        "password": DEFAULT_PROXY_PASS,
-    }
+    # Check environment variables
+    env_server = os.getenv("PROXY_SERVER")
+    if env_server:
+        conf = {"server": env_server}
+        user = os.getenv("PROXY_USER")
+        pwd = os.getenv("PROXY_PASS")
+        if user and pwd:
+            conf["username"] = user
+            conf["password"] = pwd
+        return conf
+
+    return None
 
 
 def load_job_urls(filepath: str = DEFAULT_URLS_FILE) -> List[str]:
@@ -152,8 +156,13 @@ def load_job_urls(filepath: str = DEFAULT_URLS_FILE) -> List[str]:
         except Exception as e:
             print(f"[!] Error reading URLs from '{filepath}': {e}")
 
-    # Default empty list of URLs
-    return []
+    # Default URLs fallback
+    return [
+        "https://www.dinjob.com/job/customer-service-associate-mv72gy9j-u582",
+        "https://www.dinjob.com/job/general-manager-mv71i1sm-5jru",
+        "https://www.dinjob.com/job/insurance-regulatory-and-compliance-associate-mv7115s4-0e4m",
+        "https://www.dinjob.com/job/retail-sales-supervisor-mv7026m6-beb9",
+    ]
 
 
 class WebshareScrapper:
@@ -164,7 +173,7 @@ class WebshareScrapper:
     - Real Google Chrome channel or Firefox support to avoid bot flags
     - Automation flags disabled (--disable-blink-features=AutomationControlled)
     - Stealth scripts injected to mask navigator.webdriver
-    - Webshare proxy integration
+    - Optional proxy routing via data/proxies.json or environment variables
     """
 
     def __init__(
@@ -183,9 +192,10 @@ class WebshareScrapper:
         self.page: Optional[Page] = None
 
     async def start(self) -> Page:
-        """Launches the persistent anti-detect proxied browser for this profile."""
+        """Launches the persistent anti-detect browser for this profile."""
         print(f"[*] Active Profile Folder: {self.user_data_dir}")
-        print(f"[*] Starting browser engine [{self.browser_type_name}] with proxy: {self.proxy_config.get('server')}")
+        proxy_display = self.proxy_config.get("server") if self.proxy_config else "Direct (no proxy)"
+        print(f"[*] Starting browser engine [{self.browser_type_name}] | Proxy: {proxy_display}")
         
         os.makedirs(self.user_data_dir, exist_ok=True)
         self.playwright = await async_playwright().start()
@@ -249,11 +259,11 @@ class WebshareScrapper:
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
-        print("[*] Verifying current proxy IP address...")
+        print("[*] Checking current outbound IP address...")
         try:
             await self.page.goto("https://ipv4.webshare.io/", timeout=30000)
             ip_address = (await self.page.locator("body").inner_text()).strip()
-            print(f"[+] Connected successfully! Outbound Proxy IP: {ip_address}")
+            print(f"[+] Outbound IP: {ip_address}")
             return ip_address
         except Exception as e:
             print(f"[-] Webshare IP check failed: {e}. Trying httpbin...")
@@ -470,7 +480,7 @@ async def main():
     try:
         await scrapper.start()
         
-        # Verify proxy connection
+        # Check outbound IP
         if not cli_args.skip_ip_check:
             await scrapper.verify_proxy_ip()
         
