@@ -4,7 +4,7 @@ import os
 import random
 import sys
 import argparse
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright, BrowserContext, Page
 
 # Webshare Default Configurations (fallback if data/proxies.json is not present)
@@ -12,8 +12,9 @@ DEFAULT_PROXY_SERVER = "http://p.webshare.io:80"
 DEFAULT_PROXY_USER_BASE = "mukul123456"
 DEFAULT_PROXY_PASS = "AB123ab1234"
 
-# Default cookies export file (optional secondary import)
-DEFAULT_COOKIES_FILE = "cookies.json"
+# Default files
+DEFAULT_URLS_FILE = "urls.txt"
+DEFAULT_OUTPUT_FILE = "scraped_jobs.json"
 
 # Stealth script injected before any web page scripts execute
 STEALTH_INIT_SCRIPT = """
@@ -137,87 +138,33 @@ def get_webshare_proxy(rotate: bool = True) -> Dict[str, str]:
     }
 
 
-def sanitize_cookie_for_playwright(raw_cookie: dict) -> Optional[dict]:
+def load_job_urls(filepath: str = DEFAULT_URLS_FILE) -> List[str]:
     """
-    Cleans and normalizes a single cookie object (from Cookie-Editor / EditThisCookie)
-    into the format strictly expected by Playwright.
+    Loads target job URLs from a text file (one URL per line).
+    Falls back to the provided default list if the file is not found.
     """
-    cookie = {}
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                urls = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            if urls:
+                return urls
+        except Exception as e:
+            print(f"[!] Error reading URLs from '{filepath}': {e}")
 
-    if "name" in raw_cookie and "value" in raw_cookie:
-        cookie["name"] = str(raw_cookie["name"])
-        cookie["value"] = str(raw_cookie["value"])
-    else:
-        return None
-
-    if "domain" in raw_cookie and raw_cookie["domain"]:
-        cookie["domain"] = raw_cookie["domain"]
-    if "path" in raw_cookie and raw_cookie["path"]:
-        cookie["path"] = raw_cookie["path"]
-    if "url" in raw_cookie and raw_cookie["url"]:
-        cookie["url"] = raw_cookie["url"]
-
-    if "domain" not in cookie and "url" not in cookie:
-        return None
-
-    if "expires" in raw_cookie and raw_cookie["expires"] is not None:
-        cookie["expires"] = float(raw_cookie["expires"])
-    elif "expirationDate" in raw_cookie and raw_cookie["expirationDate"] is not None:
-        if not raw_cookie.get("session", False):
-            cookie["expires"] = float(raw_cookie["expirationDate"])
-
-    if "httpOnly" in raw_cookie:
-        cookie["httpOnly"] = bool(raw_cookie["httpOnly"])
-    if "secure" in raw_cookie:
-        cookie["secure"] = bool(raw_cookie["secure"])
-
-    if "sameSite" in raw_cookie and raw_cookie["sameSite"]:
-        s_site = str(raw_cookie["sameSite"]).lower()
-        if s_site in ["strict"]:
-            cookie["sameSite"] = "Strict"
-        elif s_site in ["lax", "unspecified"]:
-            cookie["sameSite"] = "Lax"
-        elif s_site in ["none", "no_restriction"]:
-            cookie["sameSite"] = "None"
-
-    return cookie
-
-
-def load_and_sanitize_cookies(filepath: str = DEFAULT_COOKIES_FILE) -> List[dict]:
-    """Loads exported cookies from a JSON file and returns sanitized cookies."""
-    if not os.path.exists(filepath):
-        return []
-
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            raw_cookies = json.load(f)
-
-        if not isinstance(raw_cookies, list):
-            return []
-
-        sanitized = []
-        for c in raw_cookies:
-            clean = sanitize_cookie_for_playwright(c)
-            if clean:
-                sanitized.append(clean)
-
-        return sanitized
-    except Exception as e:
-        print(f"[!] Error loading cookies from '{filepath}': {e}")
-        return []
+    # Default empty list of URLs
+    return []
 
 
 class WebshareScrapper:
     """
-    Stealth Playwright scraper supporting isolated Persistent Profiles.
-    
-    Features:
-    - Multiple Isolated Profiles: Each profile gets its own storage folder
-      where cookies, logins, localStorage, and IndexedDB persist independently.
-    - Real Google Chrome channel or Firefox support to avoid bot flags.
-    - Automation flags disabled (--disable-blink-features=AutomationControlled).
-    - Stealth scripts injected to mask navigator.webdriver.
-    - Webshare proxy integration.
+    Stealth Playwright scraper supporting:
+    - Batch job page scraping for schema.org application/ld+json data
+    - Multiple Isolated Profiles: Each profile keeps its cookies/logins separately on disk
+    - Real Google Chrome channel or Firefox support to avoid bot flags
+    - Automation flags disabled (--disable-blink-features=AutomationControlled)
+    - Stealth scripts injected to mask navigator.webdriver
+    - Webshare proxy integration
     """
 
     def __init__(
@@ -225,14 +172,12 @@ class WebshareScrapper:
         headless: bool = False,
         browser_type: str = "chrome",  # Options: 'chrome', 'firefox', 'chromium'
         profile: str = "default",       # Profile name or directory path
-        proxy_config: Optional[Dict[str, str]] = None,
-        cookies_file: Optional[str] = DEFAULT_COOKIES_FILE
+        proxy_config: Optional[Dict[str, str]] = None
     ):
         self.headless = headless
         self.browser_type_name = browser_type.lower()
         self.user_data_dir = os.path.abspath(resolve_profile_path(profile))
         self.proxy_config = proxy_config or get_webshare_proxy()
-        self.cookies_file = cookies_file
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -295,28 +240,9 @@ class WebshareScrapper:
         # Inject anti-detection stealth script on all pages and frames
         await self.context.add_init_script(STEALTH_INIT_SCRIPT)
 
-        # Optional: load external cookies.json if present
-        if self.cookies_file and os.path.exists(self.cookies_file):
-            await self.inject_cookies(self.cookies_file)
-
         # In persistent context, the initial page is automatically created
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         return self.page
-
-    async def inject_cookies(self, filepath: str = DEFAULT_COOKIES_FILE) -> int:
-        """Injects cookies from a JSON file into the profile context if needed."""
-        if not self.context:
-            raise RuntimeError("Browser context not started yet.")
-
-        cookies = load_and_sanitize_cookies(filepath)
-        if cookies:
-            try:
-                await self.context.add_cookies(cookies)
-                print(f"[+] Loaded {len(cookies)} cookies into profile from '{filepath}'")
-                return len(cookies)
-            except Exception as e:
-                print(f"[!] Cookie import warning: {e}")
-        return 0
 
     async def verify_proxy_ip(self) -> str:
         """Navigates to an IP check service and prints the detected outbound IP."""
@@ -336,14 +262,117 @@ class WebshareScrapper:
             print(f"[+] Outbound IP response: {ip_content.strip()}")
             return ip_content.strip()
 
+    async def extract_ld_json(self, url: str) -> List[Dict[str, Any]]:
+        """
+        Visits a single page and extracts all application/ld+json script contents.
+        """
+        if not self.page:
+            raise RuntimeError("Browser not started. Call start() first.")
+
+        await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+        # Allow dynamic frameworks a moment to populate metadata
+        try:
+            await self.page.wait_for_selector('script[type="application/ld+json"]', timeout=8000)
+        except Exception:
+            pass
+
+        scripts = await self.page.locator('script[type="application/ld+json"]').all()
+        extracted: List[Dict[str, Any]] = []
+
+        for s in scripts:
+            try:
+                raw_text = (await s.inner_text()).strip()
+                if not raw_text:
+                    continue
+                parsed = json.loads(raw_text)
+
+                # Check if it's an array or single dict or @graph structure
+                if isinstance(parsed, list):
+                    extracted.extend([item for item in parsed if isinstance(item, dict)])
+                elif isinstance(parsed, dict):
+                    if "@graph" in parsed and isinstance(parsed["@graph"], list):
+                        extracted.extend([item for item in parsed["@graph"] if isinstance(item, dict)])
+                    else:
+                        extracted.append(parsed)
+            except Exception as e:
+                print(f"    [!] Error parsing ld+json tag: {e}")
+
+        return extracted
+
+    async def scrape_jobs_batch(
+        self,
+        urls: List[str],
+        output_file: str = DEFAULT_OUTPUT_FILE,
+        delay_range: tuple = (1.0, 2.5)
+    ) -> List[Dict[str, Any]]:
+        """
+        Visits each URL in the list, extracts the schema.org application/ld+json,
+        and saves all collected jobs into a single JSON array.
+        """
+        results: List[Dict[str, Any]] = []
+        total = len(urls)
+        print(f"\n{'='*70}")
+        print(f"[*] Starting Batch Extraction: {total} job URL(s)")
+        print(f"{'='*70}")
+
+        for index, url in enumerate(urls, start=1):
+            url = url.strip()
+            if not url or url.startswith("#"):
+                continue
+
+            print(f"\n[{index}/{total}] Visiting: {url}")
+            try:
+                ld_items = await self.extract_ld_json(url)
+
+                # Look for schema with @type == "JobPosting"
+                job_postings = [
+                    item for item in ld_items 
+                    if str(item.get("@type", "")).lower() == "jobposting"
+                ]
+
+                if job_postings:
+                    for job in job_postings:
+                        job["_scraped_url"] = url
+                        results.append(job)
+                        title = job.get("title", "N/A")
+                        hiring_org = job.get("hiringOrganization")
+                        org_name = hiring_org.get("name", "N/A") if isinstance(hiring_org, dict) else str(hiring_org or "N/A")
+                        print(f"    [+] Found JobPosting: '{title}' by '{org_name}'")
+                elif ld_items:
+                    # If specific JobPosting type is not explicitly labeled, save all ld+json blocks
+                    for item in ld_items:
+                        item["_scraped_url"] = url
+                        results.append(item)
+                    print(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
+                else:
+                    print("    [-] No application/ld+json found on page.")
+
+                # Periodically save incremental progress so data is not lost
+                with open(output_file, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+
+            except Exception as e:
+                print(f"    [!] Error processing {url}: {e}")
+
+            # Polite anti-ban delay between page requests
+            if index < total:
+                wait_time = random.uniform(*delay_range)
+                await asyncio.sleep(wait_time)
+
+        print(f"\n{'='*70}")
+        print(f"[✓] Completed! Successfully scraped {len(results)} job schema(s).")
+        print(f"[✓] Saved results to: {os.path.abspath(output_file)}")
+        print(f"{'='*70}")
+        return results
+
     async def wait_until_closed(self):
         """
         Keeps the script running and the browser open until you manually
         close the browser window or press Ctrl+C in the terminal.
         """
-        print(f"\n[*] Browser is open and ready under profile: [{os.path.basename(self.user_data_dir)}]")
-        print("[*] All logins, cookies, and actions are saved automatically.")
-        print("[*] Close the browser window when finished to save and exit.")
+        print(f"\n[*] Browser is open under profile: [{os.path.basename(self.user_data_dir)}]")
+        print("[*] Close the browser window when finished to exit.")
         close_event = asyncio.Event()
 
         if self.page:
@@ -370,12 +399,12 @@ class WebshareScrapper:
 
 
 def parse_cli_args():
-    """Parses command-line arguments for browser and profile selection."""
-    parser = argparse.ArgumentParser(description="Webshare Playwright Persistent Profile Scraper")
+    """Parses command-line arguments for browser, profile, and scraping inputs."""
+    parser = argparse.ArgumentParser(description="Webshare Playwright Job Schema Scraper")
     parser.add_argument(
         "--profile", "-p",
         default="default",
-        help="Profile name or folder path (e.g. 'profile1', 'account2', 'profile_google')"
+        help="Profile name or folder path (e.g. 'profile1', 'account2', 'default')"
     )
     parser.add_argument(
         "--browser", "-b",
@@ -387,6 +416,21 @@ def parse_cli_args():
         "--headless",
         action="store_true",
         help="Run browser in background headless mode"
+    )
+    parser.add_argument(
+        "--urls-file", "-u",
+        default=DEFAULT_URLS_FILE,
+        help=f"Path to text file containing job URLs, one per line (default: {DEFAULT_URLS_FILE})"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        default=DEFAULT_OUTPUT_FILE,
+        help=f"Output JSON file path (default: {DEFAULT_OUTPUT_FILE})"
+    )
+    parser.add_argument(
+        "--skip-ip-check",
+        action="store_true",
+        help="Skip the initial proxy IP verification check"
     )
     parser.add_argument(
         "positional_args",
@@ -412,7 +456,11 @@ def parse_cli_args():
 async def main():
     cli_args = parse_cli_args()
 
-    # Initialize scraper with chosen Persistent Profile and Browser
+    # 1. Load job URLs to scrape
+    job_urls = load_job_urls(cli_args.urls_file)
+    print(f"[*] Loaded {len(job_urls)} URL(s) from '{cli_args.urls_file}'.")
+
+    # 2. Initialize scraper with chosen Persistent Profile and Browser
     scrapper = WebshareScrapper(
         headless=cli_args.headless,
         browser_type=cli_args.browser,
@@ -420,19 +468,21 @@ async def main():
     )
     
     try:
-        page = await scrapper.start()
+        await scrapper.start()
         
-        # 1. Verify proxy IP
-        await scrapper.verify_proxy_ip()
+        # Verify proxy connection
+        if not cli_args.skip_ip_check:
+            await scrapper.verify_proxy_ip()
         
-        # 2. Example: Navigate to target website
-        # Replace this URL with your target website
-        target_url = "https://www.linkedin.com/feed/"
-        await page.goto(target_url, wait_until="domcontentloaded")
-        print("Page Title:", await page.title())
+        # 3. Scrape application/ld+json for each job URL and output to JSON
+        await scrapper.scrape_jobs_batch(
+            urls=job_urls,
+            output_file=cli_args.output
+        )
 
-        # Keep browser open until manually closed by user
-        await scrapper.wait_until_closed()
+        # Keep browser open if user is running headfully to inspect
+        if not cli_args.headless:
+            await scrapper.wait_until_closed()
 
     except KeyboardInterrupt:
         print("\n[*] Script interrupted by user.")

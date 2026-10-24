@@ -5,3 +5,5 @@ browser_profile*/
 browser_profiles/
 cookies.json
 *.log
+scraped_jobs.json
+urls.txt
