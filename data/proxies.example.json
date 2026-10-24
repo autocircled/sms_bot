@@ -1,0 +1,5 @@
+{
+    "proxies": [
+        "p.webshare.io:80:your_username-1:your_password"
+    ]
+}
