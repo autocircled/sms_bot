@@ -247,7 +247,6 @@ class WebshareScrapper:
 
         common_args = [
             "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
             "--disable-infobars",
             "--disable-dev-shm-usage",
             "--lang=en-US",
