@@ -1,2 +1,7 @@
 __pycache__/
 env/
+browser_profile/
+browser_profile*/
+browser_profiles/
+cookies.json
+*.log
