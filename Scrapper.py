@@ -5,6 +5,7 @@ import random
 import sys
 import argparse
 import urllib.parse
+import re
 from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright, BrowserContext, Page
 
@@ -145,10 +146,11 @@ def get_webshare_proxy() -> Optional[Dict[str, str]]:
 
 def decode_safety_url(href: str) -> Optional[str]:
     """
-    Decodes the actual external destination URL from DinJob's safety redirect URL.
+    Decodes the actual external destination URL from DinJob's safety redirect URL,
+    and replaces source=LinkedIn with source=Dinjob.
     Example:
-    https://www.dinjob.com/safety/go/?url=https%3A%2F%2Fwonder.wd1.myworkdayjobs.com...
-    -> https://wonder.wd1.myworkdayjobs.com...
+    https://www.dinjob.com/safety/go/?url=https%3A%2F%2Fwonder...myworkdayjobs.com%2F...%3Fsource%3DLinkedIn...
+    -> https://wonder...myworkdayjobs.com/.../?source=Dinjob
     """
     if not href:
         return None
@@ -156,7 +158,10 @@ def decode_safety_url(href: str) -> Optional[str]:
         parsed = urllib.parse.urlparse(href)
         qs = urllib.parse.parse_qs(parsed.query)
         if "url" in qs and qs["url"]:
-            return urllib.parse.unquote(qs["url"][0])
+            raw_url = urllib.parse.unquote(qs["url"][0])
+            # Replace source=LinkedIn (case-insensitive) with source=Dinjob
+            cleaned_url = re.sub(r'([?&]source=)[^&#]+', r'\g<1>Dinjob', raw_url, flags=re.IGNORECASE)
+            return cleaned_url
     except Exception:
         pass
     return None
@@ -190,7 +195,7 @@ class WebshareScrapper:
     Stealth Playwright scraper supporting:
     - Batch job page scraping for schema.org application/ld+json data
     - Direct extraction and decoding of actual apply links from "Apply on Company Site"
-    - Tagging source as "Dinjob"
+    - Converting source=LinkedIn to source=Dinjob in actual_apply_url
     - Multiple Isolated Profiles: Each profile keeps its cookies/logins separately on disk
     - Real Google Chrome channel or Firefox support to avoid bot flags
     - Automation flags disabled (--disable-blink-features=AutomationControlled)
@@ -294,13 +299,13 @@ class WebshareScrapper:
             print(f"[+] Outbound IP response: {ip_content.strip()}")
             return ip_content.strip()
 
-    async def extract_apply_links(self) -> Dict[str, Optional[str]]:
+    async def extract_apply_link(self) -> Optional[str]:
         """
         Locates the 'Apply on Company Site' link on the current DinJob page
-        and extracts both the encoded redirect link and the decoded actual destination link.
+        and extracts the decoded destination link (with source=LinkedIn changed to source=Dinjob).
         """
         if not self.page:
-            return {"actual_apply_url": None, "encoded_apply_url": None}
+            return None
 
         candidate_selectors = [
             "a:has-text('Apply on Company Site')",
@@ -318,14 +323,11 @@ class WebshareScrapper:
                         encoded_url = href if href.startswith("http") else urllib.parse.urljoin("https://www.dinjob.com", href)
                         actual_url = decode_safety_url(encoded_url)
                         if actual_url:
-                            return {
-                                "actual_apply_url": actual_url,
-                                "encoded_apply_url": encoded_url
-                            }
+                            return actual_url
             except Exception:
                 continue
 
-        return {"actual_apply_url": None, "encoded_apply_url": None}
+        return None
 
     async def extract_ld_json(self) -> List[Dict[str, Any]]:
         """
@@ -371,7 +373,7 @@ class WebshareScrapper:
     ) -> List[Dict[str, Any]]:
         """
         Visits each URL in the list, extracts the schema.org application/ld+json,
-        extracts the actual apply link from 'Apply on Company Site', sets source='Dinjob',
+        extracts the actual apply link from 'Apply on Company Site' (with source=Dinjob),
         and saves all collected jobs into a single JSON array.
         """
         results: List[Dict[str, Any]] = []
@@ -393,10 +395,8 @@ class WebshareScrapper:
                 # 2. Extract schema.org metadata
                 ld_items = await self.extract_ld_json()
 
-                # 3. Extract and decode the actual Apply link
-                apply_info = await self.extract_apply_links()
-                actual_apply = apply_info.get("actual_apply_url")
-                encoded_apply = apply_info.get("encoded_apply_url")
+                # 3. Extract and decode the actual Apply link (with source=LinkedIn -> source=Dinjob)
+                actual_apply = await self.extract_apply_link()
 
                 # Look for schema with @type == "JobPosting"
                 job_postings = [
@@ -406,11 +406,8 @@ class WebshareScrapper:
 
                 if job_postings:
                     for job in job_postings:
-                        # Required fields
-                        job["source"] = "Dinjob"
                         job["_scraped_url"] = url
                         job["actual_apply_url"] = actual_apply
-                        job["encoded_apply_url"] = encoded_apply
 
                         results.append(job)
 
@@ -424,19 +421,15 @@ class WebshareScrapper:
                             print(f"    [*] Apply Link: None (Internal or Sign-in required)")
                 elif ld_items:
                     for item in ld_items:
-                        item["source"] = "Dinjob"
                         item["_scraped_url"] = url
                         item["actual_apply_url"] = actual_apply
-                        item["encoded_apply_url"] = encoded_apply
                         results.append(item)
                     print(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
                 else:
                     # Even if no ld+json found, record minimal structure
                     minimal_job = {
-                        "source": "Dinjob",
                         "_scraped_url": url,
-                        "actual_apply_url": actual_apply,
-                        "encoded_apply_url": encoded_apply
+                        "actual_apply_url": actual_apply
                     }
                     results.append(minimal_job)
                     print("    [-] No application/ld+json found, recorded basic metadata.")

@@ -196,10 +196,8 @@ The output is saved as a clean JSON array of Schema.org `JobPosting` objects:
     },
     "datePosted": "2026-10-13T19:21:15.895Z",
     "description": "...",
-    "source": "Dinjob",
     "_scraped_url": "https://www.dinjob.com/job/customer-service-associate-mv72gy9j-u582",
-    "actual_apply_url": "https://grnh.se/e317mqkt9us",
-    "encoded_apply_url": "https://www.dinjob.com/safety/go/?url=https%3A%2F%2Fgrnh.se%2Fe317mqkt9us&urlhash=osyK..."
+    "actual_apply_url": "https://grnh.se/e317mqkt9us"
   }
 ]
 ```
