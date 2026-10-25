@@ -4,6 +4,7 @@ import os
 import random
 import sys
 import argparse
+import urllib.parse
 from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright, BrowserContext, Page
 
@@ -142,6 +143,25 @@ def get_webshare_proxy() -> Optional[Dict[str, str]]:
     return None
 
 
+def decode_safety_url(href: str) -> Optional[str]:
+    """
+    Decodes the actual external destination URL from DinJob's safety redirect URL.
+    Example:
+    https://www.dinjob.com/safety/go/?url=https%3A%2F%2Fwonder.wd1.myworkdayjobs.com...
+    -> https://wonder.wd1.myworkdayjobs.com...
+    """
+    if not href:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(href)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "url" in qs and qs["url"]:
+            return urllib.parse.unquote(qs["url"][0])
+    except Exception:
+        pass
+    return None
+
+
 def load_job_urls(filepath: str = DEFAULT_URLS_FILE) -> List[str]:
     """
     Loads target job URLs from a text file (one URL per line).
@@ -169,6 +189,8 @@ class WebshareScrapper:
     """
     Stealth Playwright scraper supporting:
     - Batch job page scraping for schema.org application/ld+json data
+    - Direct extraction and decoding of actual apply links from "Apply on Company Site"
+    - Tagging source as "Dinjob"
     - Multiple Isolated Profiles: Each profile keeps its cookies/logins separately on disk
     - Real Google Chrome channel or Firefox support to avoid bot flags
     - Automation flags disabled (--disable-blink-features=AutomationControlled)
@@ -272,18 +294,49 @@ class WebshareScrapper:
             print(f"[+] Outbound IP response: {ip_content.strip()}")
             return ip_content.strip()
 
-    async def extract_ld_json(self, url: str) -> List[Dict[str, Any]]:
+    async def extract_apply_links(self) -> Dict[str, Optional[str]]:
         """
-        Visits a single page and extracts all application/ld+json script contents.
+        Locates the 'Apply on Company Site' link on the current DinJob page
+        and extracts both the encoded redirect link and the decoded actual destination link.
         """
         if not self.page:
-            raise RuntimeError("Browser not started. Call start() first.")
+            return {"actual_apply_url": None, "encoded_apply_url": None}
 
-        await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        candidate_selectors = [
+            "a:has-text('Apply on Company Site')",
+            "a[href*='/safety/go/']",
+            "a:has-text('Apply on company')",
+            "a:has-text('Apply on')",
+        ]
+
+        for sel in candidate_selectors:
+            try:
+                links = await self.page.locator(sel).all()
+                for link in links:
+                    href = await link.get_attribute("href")
+                    if href and ("/safety/go/" in href or "url=" in href):
+                        encoded_url = href if href.startswith("http") else urllib.parse.urljoin("https://www.dinjob.com", href)
+                        actual_url = decode_safety_url(encoded_url)
+                        if actual_url:
+                            return {
+                                "actual_apply_url": actual_url,
+                                "encoded_apply_url": encoded_url
+                            }
+            except Exception:
+                continue
+
+        return {"actual_apply_url": None, "encoded_apply_url": None}
+
+    async def extract_ld_json(self) -> List[Dict[str, Any]]:
+        """
+        Extracts all application/ld+json script contents from the currently loaded page.
+        """
+        if not self.page:
+            return []
 
         # Allow dynamic frameworks a moment to populate metadata
         try:
-            await self.page.wait_for_selector('script[type="application/ld+json"]', timeout=8000)
+            await self.page.wait_for_selector('script[type="application/ld+json"]', timeout=6000)
         except Exception:
             pass
 
@@ -318,6 +371,7 @@ class WebshareScrapper:
     ) -> List[Dict[str, Any]]:
         """
         Visits each URL in the list, extracts the schema.org application/ld+json,
+        extracts the actual apply link from 'Apply on Company Site', sets source='Dinjob',
         and saves all collected jobs into a single JSON array.
         """
         results: List[Dict[str, Any]] = []
@@ -333,7 +387,16 @@ class WebshareScrapper:
 
             print(f"\n[{index}/{total}] Visiting: {url}")
             try:
-                ld_items = await self.extract_ld_json(url)
+                # 1. Navigate to the job page
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+                # 2. Extract schema.org metadata
+                ld_items = await self.extract_ld_json()
+
+                # 3. Extract and decode the actual Apply link
+                apply_info = await self.extract_apply_links()
+                actual_apply = apply_info.get("actual_apply_url")
+                encoded_apply = apply_info.get("encoded_apply_url")
 
                 # Look for schema with @type == "JobPosting"
                 job_postings = [
@@ -343,20 +406,40 @@ class WebshareScrapper:
 
                 if job_postings:
                     for job in job_postings:
+                        # Required fields
+                        job["source"] = "Dinjob"
                         job["_scraped_url"] = url
+                        job["actual_apply_url"] = actual_apply
+                        job["encoded_apply_url"] = encoded_apply
+
                         results.append(job)
+
                         title = job.get("title", "N/A")
                         hiring_org = job.get("hiringOrganization")
                         org_name = hiring_org.get("name", "N/A") if isinstance(hiring_org, dict) else str(hiring_org or "N/A")
-                        print(f"    [+] Found JobPosting: '{title}' by '{org_name}'")
+                        print(f"    [+] Job: '{title}' by '{org_name}'")
+                        if actual_apply:
+                            print(f"    [+] Apply Link: {actual_apply}")
+                        else:
+                            print(f"    [*] Apply Link: None (Internal or Sign-in required)")
                 elif ld_items:
-                    # If specific JobPosting type is not explicitly labeled, save all ld+json blocks
                     for item in ld_items:
+                        item["source"] = "Dinjob"
                         item["_scraped_url"] = url
+                        item["actual_apply_url"] = actual_apply
+                        item["encoded_apply_url"] = encoded_apply
                         results.append(item)
                     print(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
                 else:
-                    print("    [-] No application/ld+json found on page.")
+                    # Even if no ld+json found, record minimal structure
+                    minimal_job = {
+                        "source": "Dinjob",
+                        "_scraped_url": url,
+                        "actual_apply_url": actual_apply,
+                        "encoded_apply_url": encoded_apply
+                    }
+                    results.append(minimal_job)
+                    print("    [-] No application/ld+json found, recorded basic metadata.")
 
                 # Periodically save incremental progress so data is not lost
                 with open(output_file, "w", encoding="utf-8") as f:
@@ -484,7 +567,7 @@ async def main():
         if not cli_args.skip_ip_check:
             await scrapper.verify_proxy_ip()
         
-        # 3. Scrape application/ld+json for each job URL and output to JSON
+        # 3. Scrape application/ld+json and apply links for each job URL
         await scrapper.scrape_jobs_batch(
             urls=job_urls,
             output_file=cli_args.output
