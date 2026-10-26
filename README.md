@@ -150,10 +150,21 @@ Skip the initial `ipv4.webshare.io` check to start scraping immediately:
 
 ---
 
+### 7. Manual Interaction Mode (`--url`)
+Open any website directly under a specific persistent profile without running the scraper. This allows you to manually log in, solve CAPTCHAs, or browse:
+
+```powershell
+.\env\Scripts\python.exe Scrapper.py --profile sandeep --url https://google.com
+```
+*(The browser will navigate to the site and remain open for your manual interaction until you close the browser window).*
+
+---
+
 ## 🛠️ CLI Options Reference
 
 | Flag / Option | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `--url` | | `None` | Open a specific URL for manual interaction without scraping |
 | `--browser` | `-b` | `chrome` | Browser engine: `chrome`, `firefox`, or `chromium` |
 | `--profile` | `-p` | `default` | Profile name or folder path inside `browser_profiles/` |
 | `--headless` | | `False` | Run in headless background mode |

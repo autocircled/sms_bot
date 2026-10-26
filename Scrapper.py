@@ -488,6 +488,11 @@ def parse_cli_args():
     """Parses command-line arguments for browser, profile, and scraping inputs."""
     parser = argparse.ArgumentParser(description="Webshare Playwright Job Schema Scraper")
     parser.add_argument(
+        "--url",
+        default=None,
+        help="Open a specific URL for manual interaction without running the scraper"
+    )
+    parser.add_argument(
         "--profile", "-p",
         default="default",
         help="Profile name or folder path (e.g. 'profile1', 'account2', 'default')"
@@ -527,7 +532,7 @@ def parse_cli_args():
     args = parser.parse_args()
 
     # Handle convenience positional arguments (e.g. `python Scrapper.py profile2` or `python Scrapper.py firefox profile2`)
-    if args.positional_args:
+    if args.positional_args and args.profile == "default":
         pos0 = args.positional_args[0].lower()
         if pos0 in ["chrome", "firefox", "chromium"]:
             args.browser = pos0
@@ -542,16 +547,45 @@ def parse_cli_args():
 async def main():
     cli_args = parse_cli_args()
 
-    # 1. Load job URLs to scrape
-    job_urls = load_job_urls(cli_args.urls_file)
-    print(f"[*] Loaded {len(job_urls)} URL(s) from '{cli_args.urls_file}'.")
-
-    # 2. Initialize scraper with chosen Persistent Profile and Browser
+    # Initialize scraper with chosen Persistent Profile and Browser
     scrapper = WebshareScrapper(
         headless=cli_args.headless,
         browser_type=cli_args.browser,
         profile=cli_args.profile
     )
+
+    # Mode 1: Open a single URL for manual interaction only
+    if cli_args.url:
+        target_url = cli_args.url.strip()
+        if not target_url.startswith("http://") and not target_url.startswith("https://"):
+            target_url = "https://" + target_url
+
+        print(f"\n[*] Manual Interaction Mode")
+        print(f"[*] Target URL: {target_url}")
+        print(f"[*] Profile: {cli_args.profile} ({scrapper.user_data_dir})")
+
+        try:
+            await scrapper.start()
+
+            if not cli_args.skip_ip_check:
+                await scrapper.verify_proxy_ip()
+
+            print(f"[*] Navigating to: {target_url}")
+            await scrapper.page.goto(target_url, wait_until="domcontentloaded")
+            print(f"[+] Loaded successfully: '{await scrapper.page.title()}'")
+            print("[*] Browser is ready for manual interaction.")
+            print("[*] When you are finished, close the browser window to save and exit.")
+            await scrapper.wait_until_closed()
+
+        except KeyboardInterrupt:
+            print("\n[*] Script interrupted by user.")
+        finally:
+            await scrapper.close()
+        return
+
+    # Mode 2: Batch scraping job URLs from urls-file
+    job_urls = load_job_urls(cli_args.urls_file)
+    print(f"[*] Loaded {len(job_urls)} URL(s) from '{cli_args.urls_file}'.")
     
     try:
         await scrapper.start()
@@ -560,7 +594,7 @@ async def main():
         if not cli_args.skip_ip_check:
             await scrapper.verify_proxy_ip()
         
-        # 3. Scrape application/ld+json and apply links for each job URL
+        # Scrape application/ld+json and apply links for each job URL
         await scrapper.scrape_jobs_batch(
             urls=job_urls,
             output_file=cli_args.output
