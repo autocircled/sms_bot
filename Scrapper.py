@@ -182,12 +182,7 @@ def load_job_urls(filepath: str = DEFAULT_URLS_FILE) -> List[str]:
             print(f"[!] Error reading URLs from '{filepath}': {e}")
 
     # Default URLs fallback
-    return [
-        "https://www.dinjob.com/job/customer-service-associate-mv72gy9j-u582",
-        "https://www.dinjob.com/job/general-manager-mv71i1sm-5jru",
-        "https://www.dinjob.com/job/insurance-regulatory-and-compliance-associate-mv7115s4-0e4m",
-        "https://www.dinjob.com/job/retail-sales-supervisor-mv7026m6-beb9",
-    ]
+    return []
 
 
 class WebshareScrapper:
@@ -208,12 +203,14 @@ class WebshareScrapper:
         headless: bool = False,
         browser_type: str = "chrome",  # Options: 'chrome', 'firefox', 'chromium'
         profile: str = "default",       # Profile name or directory path
-        proxy_config: Optional[Dict[str, str]] = None
+        proxy_config: Optional[Dict[str, str]] = None,
+        extensions: Optional[List[str]] = None
     ):
         self.headless = headless
         self.browser_type_name = browser_type.lower()
         self.user_data_dir = os.path.abspath(resolve_profile_path(profile))
         self.proxy_config = proxy_config or get_webshare_proxy()
+        self.extensions = extensions or []
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -233,6 +230,30 @@ class WebshareScrapper:
             "--disable-dev-shm-usage",
             "--lang=en-US",
         ]
+
+        # Add unpacked Chrome extensions if specified
+        if self.extensions:
+            if self.browser_type_name in ["chrome", "chromium"]:
+                valid_exts = []
+                for ext in self.extensions:
+                    abs_path = os.path.abspath(ext)
+                    manifest_file = os.path.join(abs_path, "manifest.json")
+                    if os.path.exists(manifest_file):
+                        valid_exts.append(abs_path)
+                    elif os.path.exists(abs_path):
+                        valid_exts.append(abs_path)
+                    else:
+                        print(f"[!] Warning: Extension directory not found or missing manifest.json: {ext}")
+
+                if valid_exts:
+                    joined_exts = ",".join(valid_exts)
+                    common_args.extend([
+                        f"--disable-extensions-except={joined_exts}",
+                        f"--load-extension={joined_exts}",
+                    ])
+                    print(f"[*] Loaded {len(valid_exts)} extension(s): {', '.join([os.path.basename(e) for e in valid_exts])}")
+            else:
+                print(f"[!] Note: Loading extensions via '--extension' is supported in Chrome/Chromium.")
 
         if self.browser_type_name == "chrome":
             # Launch persistent context using system Google Chrome
@@ -310,6 +331,7 @@ class WebshareScrapper:
         candidate_selectors = [
             "a:has-text('Apply on Company Site')",
             "a[href*='/safety/go/']",
+            "a[aria-label='Apply on company website']",
             "a:has-text('Apply on company')",
             "a:has-text('Apply on')",
         ]
@@ -519,6 +541,12 @@ def parse_cli_args():
         help=f"Output JSON file path (default: {DEFAULT_OUTPUT_FILE})"
     )
     parser.add_argument(
+        "--extension", "-e",
+        action="append",
+        dest="extensions",
+        help="Path to an unpacked Chrome extension folder (can be specified multiple times)"
+    )
+    parser.add_argument(
         "--skip-ip-check",
         action="store_true",
         help="Skip the initial proxy IP verification check"
@@ -547,11 +575,12 @@ def parse_cli_args():
 async def main():
     cli_args = parse_cli_args()
 
-    # Initialize scraper with chosen Persistent Profile and Browser
+    # Initialize scraper with chosen Persistent Profile, Browser, and Extensions
     scrapper = WebshareScrapper(
         headless=cli_args.headless,
         browser_type=cli_args.browser,
-        profile=cli_args.profile
+        profile=cli_args.profile,
+        extensions=cli_args.extensions
     )
 
     # Mode 1: Open a single URL for manual interaction only

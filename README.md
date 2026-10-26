@@ -160,11 +160,29 @@ Open any website directly under a specific persistent profile without running th
 
 ---
 
+### 8. Using Pre-Built Chrome Extensions (`--extension`)
+You can load an unpacked Chrome extension (folder containing `manifest.json`) into any profile:
+
+```powershell
+# Load an extension into profile 'sandeep'
+.\env\Scripts\python.exe Scrapper.py --profile sandeep --extension ./my_extension
+
+# Combine with manual interaction
+.\env\Scripts\python.exe Scrapper.py --profile sandeep --url https://google.com --extension ./my_extension
+
+# Load multiple extensions
+.\env\Scripts\python.exe Scrapper.py --profile sandeep -e ./extension1 -e ./extension2
+```
+*The extension's settings, logins, and storage are permanently preserved in that profile.*
+
+---
+
 ## 🛠️ CLI Options Reference
 
 | Flag / Option | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--url` | | `None` | Open a specific URL for manual interaction without scraping |
+| `--extension` | `-e` | `None` | Path to unpacked Chrome extension folder (can repeat) |
 | `--browser` | `-b` | `chrome` | Browser engine: `chrome`, `firefox`, or `chromium` |
 | `--profile` | `-p` | `default` | Profile name or folder path inside `browser_profiles/` |
 | `--headless` | | `False` | Run in headless background mode |
