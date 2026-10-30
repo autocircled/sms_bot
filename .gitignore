@@ -11,5 +11,5 @@ urls.txt
 data/proxies.json
 proxies.json
 data/*.db
-*.db
+*.db*
 .env
