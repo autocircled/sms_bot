@@ -103,18 +103,39 @@ def parse_proxy_string(proxy_str: str) -> Dict[str, str]:
         raise ValueError(f"Invalid proxy format: {proxy_str}. Expected host:port:user:pass")
 
 
-def load_proxy_from_file(filepath: str = DEFAULT_PROXIES_FILE) -> Optional[Dict[str, str]]:
-    """Loads a proxy from a JSON file if available."""
+def load_all_proxies_from_file(filepath: str = DEFAULT_PROXIES_FILE) -> List[str]:
+    """Returns the list of all raw proxy strings from proxies.json."""
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            proxies = data.get("proxies", [])
-            if proxies:
-                selected = random.choice(proxies)
-                return parse_proxy_string(selected)
+            return data.get("proxies", [])
         except Exception as e:
             print(f"[!] Warning reading {filepath}: {e}")
+    return []
+
+
+def save_proxies_to_file(proxies_list: List[str], filepath: str = DEFAULT_PROXIES_FILE) -> bool:
+    """Saves a list of proxy strings into data/proxies.json."""
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump({"proxies": proxies_list}, f, indent=4)
+        return True
+    except Exception as e:
+        print(f"[!] Error saving proxies to {filepath}: {e}")
+        return False
+
+
+def load_proxy_from_file(filepath: str = DEFAULT_PROXIES_FILE) -> Optional[Dict[str, str]]:
+    """Loads a proxy from a JSON file if available."""
+    proxies = load_all_proxies_from_file(filepath)
+    if proxies:
+        selected = random.choice(proxies)
+        try:
+            return parse_proxy_string(selected)
+        except Exception as e:
+            print(f"[!] Invalid proxy '{selected}': {e}")
     return None
 
 
@@ -306,22 +327,30 @@ class WebshareScrapper:
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         return self.page
 
-    async def verify_proxy_ip(self) -> str:
+    async def verify_proxy_ip(self, on_log: Optional[Any] = None) -> str:
         """Navigates to an IP check service and prints the detected outbound IP."""
+        def log(msg: str):
+            print(msg)
+            if on_log:
+                try:
+                    on_log(msg)
+                except Exception:
+                    pass
+
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
 
-        print("[*] Checking current outbound IP address...")
+        log("[*] Checking current outbound IP address...")
         try:
             await self.page.goto("https://ipv4.webshare.io/", timeout=30000)
             ip_address = (await self.page.locator("body").inner_text()).strip()
-            print(f"[+] Outbound IP: {ip_address}")
+            log(f"[+] Outbound IP: {ip_address}")
             return ip_address
         except Exception as e:
-            print(f"[-] Webshare IP check failed: {e}. Trying httpbin...")
+            log(f"[-] Webshare IP check failed: {e}. Trying httpbin...")
             await self.page.goto("https://httpbin.org/ip", timeout=30000)
             ip_content = await self.page.locator("body").inner_text()
-            print(f"[+] Outbound IP response: {ip_content.strip()}")
+            log(f"[+] Outbound IP response: {ip_content.strip()}")
             return ip_content.strip()
 
     async def extract_apply_link(self) -> Optional[str]:
@@ -395,25 +424,42 @@ class WebshareScrapper:
         self,
         urls: List[str],
         output_file: str = DEFAULT_OUTPUT_FILE,
-        delay_range: tuple = (1.0, 2.5)
+        delay_range: tuple = (1.0, 2.5),
+        on_log: Optional[Any] = None,
+        on_progress: Optional[Any] = None,
+        stop_event: Optional[Any] = None
     ) -> List[Dict[str, Any]]:
         """
         Visits each URL in the list, extracts the schema.org application/ld+json,
         extracts the actual apply link from 'Apply on Company Site' (with source=Dinjob),
         and saves all collected jobs into a single JSON array.
+        Supports on_log, on_progress, and stop_event callbacks for UI integration.
         """
+        def log(msg: str):
+            print(msg)
+            if on_log:
+                try:
+                    on_log(msg)
+                except Exception:
+                    pass
+
         results: List[Dict[str, Any]] = []
         total = len(urls)
-        print(f"\n{'='*70}")
-        print(f"[*] Starting Batch Extraction: {total} job URL(s)")
-        print(f"{'='*70}")
+        log(f"\n{'='*70}")
+        log(f"[*] Starting Batch Extraction: {total} job URL(s)")
+        log(f"{'='*70}")
 
         for index, url in enumerate(urls, start=1):
+            if stop_event and stop_event.is_set():
+                log("\n[!] Scraping stopped by user request.")
+                break
+
             url = url.strip()
             if not url or url.startswith("#"):
                 continue
 
-            print(f"\n[{index}/{total}] Visiting: {url}")
+            log(f"\n[{index}/{total}] Visiting: {url}")
+            current_job = None
             try:
                 # 1. Navigate to the job page
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -436,46 +482,54 @@ class WebshareScrapper:
                         job["actual_apply_url"] = actual_apply
 
                         results.append(job)
+                        current_job = job
 
                         title = job.get("title", "N/A")
                         hiring_org = job.get("hiringOrganization")
                         org_name = hiring_org.get("name", "N/A") if isinstance(hiring_org, dict) else str(hiring_org or "N/A")
-                        print(f"    [+] Job: '{title}' by '{org_name}'")
+                        log(f"    [+] Job: '{title}' by '{org_name}'")
                         if actual_apply:
-                            print(f"    [+] Apply Link: {actual_apply}")
+                            log(f"    [+] Apply Link: {actual_apply}")
                         else:
-                            print(f"    [*] Apply Link: None (Internal or Sign-in required)")
+                            log(f"    [*] Apply Link: None (Internal or Sign-in required)")
                 elif ld_items:
                     for item in ld_items:
                         item["_scraped_url"] = url
                         item["actual_apply_url"] = actual_apply
                         results.append(item)
-                    print(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
+                    current_job = ld_items[0] if ld_items else None
+                    log(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
                 else:
-                    # Even if no ld+json found, record minimal structure
                     minimal_job = {
                         "_scraped_url": url,
                         "actual_apply_url": actual_apply
                     }
                     results.append(minimal_job)
-                    print("    [-] No application/ld+json found, recorded basic metadata.")
+                    current_job = minimal_job
+                    log("    [-] No application/ld+json found, recorded basic metadata.")
 
                 # Periodically save incremental progress so data is not lost
                 with open(output_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2, ensure_ascii=False)
 
             except Exception as e:
-                print(f"    [!] Error processing {url}: {e}")
+                log(f"    [!] Error processing {url}: {e}")
+
+            if on_progress:
+                try:
+                    on_progress(index, total, current_job)
+                except Exception:
+                    pass
 
             # Polite anti-ban delay between page requests
-            if index < total:
+            if index < total and not (stop_event and stop_event.is_set()):
                 wait_time = random.uniform(*delay_range)
                 await asyncio.sleep(wait_time)
 
-        print(f"\n{'='*70}")
-        print(f"[✓] Completed! Successfully scraped {len(results)} job schema(s).")
-        print(f"[✓] Saved results to: {os.path.abspath(output_file)}")
-        print(f"{'='*70}")
+        log(f"\n{'='*70}")
+        log(f"[✓] Completed! Successfully scraped {len(results)} job schema(s).")
+        log(f"[✓] Saved results to: {os.path.abspath(output_file)}")
+        log(f"{'='*70}")
         return results
 
     async def wait_until_closed(self):

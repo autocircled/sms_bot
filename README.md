@@ -26,19 +26,61 @@ An anti-detect web scraper built with **Playwright**, designed to bypass bot det
 
 ```text
 sms_bot/
-├── Scrapper.py          # Main scraper script
+├── app.py               # Modern Desktop App (CustomTkinter GUI)
+├── run_app.bat          # 1-Click launcher for Windows
+├── Scrapper.py          # Core scraper engine & CLI interface
 ├── urls.txt             # List of target URLs to scrape (1 per line)
 ├── scraped_jobs.json    # Extracted job data output (JSON array)
 ├── requirements.txt     # Python dependencies
 ├── README.md            # Documentation
 ├── data/
-│   ├── proxies.json     # Optional custom proxy configuration
-│   └── codes.json       # Country codes cache (SMS service)
+│   ├── proxies.json     # Webshare proxy configuration (git-ignored)
+│   ├── proxies.example.json # Safe proxy template
+│   └── codes.json       # Country codes cache
 └── browser_profiles/   # Persistent browser profile storage (git-ignored)
     ├── default/
     ├── profile1/
     └── ...
 ```
+
+---
+
+## 🖥️ Desktop Application (GUI)
+
+The project includes a modern dark-mode Desktop GUI built with **CustomTkinter** that allows you to manage everything visually without typing commands:
+
+### Launching the Desktop App:
+Double-click `run_app.bat` or run in PowerShell:
+```powershell
+.\env\Scripts\python.exe app.py
+```
+
+### What You Can Do in the Desktop App:
+1. **🚀 Job Scraper View**:
+   - Paste job URLs directly into the multi-line text box (or click **"Load File"** / **"Paste"**).
+   - Click **"▶ Start Scraping"** to run batch extraction with real-time progress bars and live console logging.
+   - Click **"⏹ Stop"** at any time to pause or cancel.
+   - Click **"📄 View Output JSON"** to inspect extracted results immediately.
+
+2. **🌐 Manual Browser View**:
+   - Select or create any persistent profile (e.g., `sandeep`, `account1`).
+   - Enter any URL (Google, Chrome Web Store, or job pages) and click **"🚀 Launch Browser Window"**.
+   - Browse manually, solve CAPTCHAs, log into accounts, or install extensions from the Web Store.
+   - When you close the window, all logins and extensions persist forever.
+
+3. **🛡️ Proxy Manager View**:
+   - View, Add, and Delete Webshare proxies.
+   - Bulk import proxy lists (`host:port:username:password`).
+   - Click **"🧪 Test First Working Proxy"** to check connectivity and outbound IP in real time.
+   - Automatically synchronizes with `data/proxies.json`.
+
+4. **⚙️ Settings View**:
+   - Switch browser engine (`Google Chrome`, `Firefox`, or `Chromium`).
+   - Toggle Headless background mode vs Headful visible mode.
+   - Configure random inter-page delay ranges (e.g. 1.0s to 2.5s).
+   - Customize output JSON file paths.
+
+---
 
 ---
 
