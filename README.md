@@ -160,11 +160,25 @@ Open any website directly under a specific persistent profile without running th
 
 ---
 
-### 8. Using Pre-Built Chrome Extensions (`--extension`)
-You can load an unpacked Chrome extension (folder containing `manifest.json`) into any profile:
+### 8. Installing Extensions Manually (From Chrome Web Store)
+You can install any extension directly from the Chrome Web Store and keep it forever in your profile:
+
+1. Open your profile in manual interaction mode:
+   ```powershell
+   .\env\Scripts\python.exe Scrapper.py --profile sandeep --url https://chromewebstore.google.com
+   ```
+2. Search for any extension (e.g., uBlock Origin, CAPTCHA Solver, Cookie Editor) and click **"Add to Chrome"**.
+3. Close the browser window when finished.
+
+**That's it!** The extension and all of its settings, logins, and data are saved permanently inside `browser_profiles/<profile>/` and will remain active automatically every time you launch that profile.
+
+---
+
+### 9. Using Pre-Built Unpacked Extensions (`--extension`)
+You can also load an unpacked local extension folder (containing `manifest.json`):
 
 ```powershell
-# Load an extension into profile 'sandeep'
+# Load an unpacked extension into profile 'sandeep'
 .\env\Scripts\python.exe Scrapper.py --profile sandeep --extension ./my_extension
 
 # Combine with manual interaction

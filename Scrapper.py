@@ -247,13 +247,17 @@ class WebshareScrapper:
 
                 if valid_exts:
                     joined_exts = ",".join(valid_exts)
-                    common_args.extend([
-                        f"--disable-extensions-except={joined_exts}",
-                        f"--load-extension={joined_exts}",
-                    ])
-                    print(f"[*] Loaded {len(valid_exts)} extension(s): {', '.join([os.path.basename(e) for e in valid_exts])}")
+                    common_args.append(f"--load-extension={joined_exts}")
+                    print(f"[*] Loaded {len(valid_exts)} unpacked extension(s): {', '.join([os.path.basename(e) for e in valid_exts])}")
             else:
                 print(f"[!] Note: Loading extensions via '--extension' is supported in Chrome/Chromium.")
+
+        # Ignore Playwright's default flags that disable extensions and component updates
+        chromium_ignore_defaults = [
+            "--enable-automation",
+            "--disable-extensions",
+            "--disable-component-update",
+        ]
 
         if self.browser_type_name == "chrome":
             # Launch persistent context using system Google Chrome
@@ -265,7 +269,7 @@ class WebshareScrapper:
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="America/New_York",
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=chromium_ignore_defaults,
                 args=common_args
             )
         elif self.browser_type_name == "firefox":
@@ -291,7 +295,7 @@ class WebshareScrapper:
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="America/New_York",
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=chromium_ignore_defaults,
                 args=common_args
             )
 
