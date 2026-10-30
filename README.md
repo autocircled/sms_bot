@@ -29,11 +29,13 @@ sms_bot/
 ├── app.py               # Modern Desktop App (CustomTkinter GUI)
 ├── run_app.bat          # 1-Click launcher for Windows
 ├── Scrapper.py          # Core scraper engine & CLI interface
+├── db_manager.py        # SQLite persistent database manager (data/jobs.db)
 ├── urls.txt             # List of target URLs to scrape (1 per line)
 ├── scraped_jobs.json    # Extracted job data output (JSON array)
 ├── requirements.txt     # Python dependencies
 ├── README.md            # Documentation
 ├── data/
+│   ├── jobs.db          # Unified SQLite database (git-ignored)
 │   ├── proxies.json     # Webshare proxy configuration (git-ignored)
 │   ├── proxies.example.json # Safe proxy template
 │   └── codes.json       # Country codes cache
@@ -56,25 +58,34 @@ Double-click `run_app.bat` or run in PowerShell:
 ```
 
 ### What You Can Do in the Desktop App:
-1. **🚀 Job Scraper View**:
+1. **🚀 Job Scraper View (Two-Stage Workflow)**:
    - Paste job URLs directly into the multi-line text box (or click **"Load File"** / **"Paste"**).
-   - Click **"▶ Start Scraping"** to run batch extraction with real-time progress bars and live console logging.
+   - **Stage 1: 📥 1. Scrape Job Data (Guest)**: Extracts `application/ld+json` Schema metadata without needing any account login, saving them into the local database with `status="pending_apply"`.
+   - **Stage 2: 🔑 2. Enrich Apply Links (Logged-in Profile)**: Automatically fetches pending URLs from the database, opens them with your authenticated profile (e.g., `sandeep`), extracts the real `"Apply on Company Site"` URL, and updates the database records.
    - Click **"⏹ Stop"** at any time to pause or cancel.
-   - Click **"📄 View Output JSON"** to inspect extracted results immediately.
+   - Real-time database banner displays current stats (`Ready to Export` / `Pending Apply`).
 
-2. **🌐 Manual Browser View**:
+2. **📊 Database & Export View**:
+   - Inspect all stored jobs stored in SQLite (`data/jobs.db`).
+   - Filter jobs by: **All**, **Ready Only** (has actual apply link), or **Pending Apply** (needs Stage 2).
+   - KPI metric cards: **Total Jobs**, **Ready to Export**, and **Pending Apply**.
+   - Browse job cards showing Job Title, Company, Location, Date Posted, and Apply Link status.
+   - Delete individual job records or clear records.
+   - Click **"💾 Export Ready Jobs to JSON"** to produce a clean, finalized JSON dataset ready to import into another platform.
+
+3. **🌐 Manual Browser View**:
    - Select or create any persistent profile (e.g., `sandeep`, `account1`).
-   - Enter any URL (Google, Chrome Web Store, or job pages) and click **"🚀 Launch Browser Window"**.
-   - Browse manually, solve CAPTCHAs, log into accounts, or install extensions from the Web Store.
+   - Enter any URL (Google, DinJob login page, Chrome Web Store) and click **"🚀 Launch Browser Window"**.
+   - Browse manually, solve CAPTCHAs, log into accounts (such as DinJob), or install extensions.
    - When you close the window, all logins and extensions persist forever.
 
-3. **🛡️ Proxy Manager View**:
+4. **🛡️ Proxy Manager View**:
    - View, Add, and Delete Webshare proxies.
    - Bulk import proxy lists (`host:port:username:password`).
    - Click **"🧪 Test First Working Proxy"** to check connectivity and outbound IP in real time.
    - Automatically synchronizes with `data/proxies.json`.
 
-4. **⚙️ Settings View**:
+5. **⚙️ Settings View**:
    - Switch browser engine (`Google Chrome`, `Firefox`, or `Chromium`).
    - Toggle Headless background mode vs Headful visible mode.
    - Configure random inter-page delay ranges (e.g. 1.0s to 2.5s).
@@ -233,10 +244,34 @@ You can also load an unpacked local extension folder (containing `manifest.json`
 
 ---
 
+### 10. Two-Stage Scraping Pipeline via CLI
+
+#### Stage 1: Guest Metadata Scraping
+Scrapes Schema.org `JobPosting` data without requiring user credentials, saving results to `data/jobs.db` marked as `pending_apply`:
+```powershell
+.\env\Scripts\python.exe Scrapper.py --stage guest --headless
+```
+
+#### Stage 2: Logged-in Apply Link Enrichment
+Uses your persistent profile (where you have already logged into DinJob) to visit all `pending_apply` jobs and extract the actual company apply link:
+```powershell
+.\env\Scripts\python.exe Scrapper.py --stage apply --profile sandeep
+```
+
+#### Stage 3: Export Unified JSON
+Exports all completed jobs from `data/jobs.db` as a clean, unified JSON array:
+```powershell
+.\env\Scripts\python.exe Scrapper.py --export exported_jobs.json
+```
+
+---
+
 ## 🛠️ CLI Options Reference
 
 | Flag / Option | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `--stage` | `-s` | `all` | Scraping stage: `all`, `guest` (job schema only), or `apply` (enrich pending links with profile) |
+| `--export` | | `None` | Export completed jobs from database to a clean JSON file and exit |
 | `--url` | | `None` | Open a specific URL for manual interaction without scraping |
 | `--extension` | `-e` | `None` | Path to unpacked Chrome extension folder (can repeat) |
 | `--browser` | `-b` | `chrome` | Browser engine: `chrome`, `firefox`, or `chromium` |
@@ -286,3 +321,7 @@ The output is saved as a clean JSON array of Schema.org `JobPosting` objects:
   }
 ]
 ```
+
+> **Note on Data Cleanliness**:
+> - The `actual_apply_url` has any `source=LinkedIn` tracking automatically rewritten to `source=Dinjob`.
+> - Intermediate internal fields (such as `source` and `encoded_apply_url`) are stripped from exported JSON records to provide a clean payload for importing into third-party platforms.

@@ -6,7 +6,10 @@ browser_profiles/
 cookies.json
 *.log
 scraped_jobs.json
+exported_jobs.json
 urls.txt
 data/proxies.json
 proxies.json
+data/*.db
+*.db
 .env

@@ -9,9 +9,12 @@ import re
 from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright, BrowserContext, Page
 
+import db_manager
+
 # Default files
 DEFAULT_URLS_FILE = "urls.txt"
 DEFAULT_OUTPUT_FILE = "scraped_jobs.json"
+DEFAULT_EXPORT_FILE = "exported_jobs.json"
 DEFAULT_PROXIES_FILE = "data/proxies.json"
 
 # Stealth script injected before any web page scripts execute
@@ -484,6 +487,12 @@ class WebshareScrapper:
                         results.append(job)
                         current_job = job
 
+                        # Persist to unified SQLite database by URL
+                        try:
+                            db_manager.save_guest_job(url, job, actual_apply)
+                        except Exception as db_err:
+                            log(f"    [!] DB Save Error: {db_err}")
+
                         title = job.get("title", "N/A")
                         hiring_org = job.get("hiringOrganization")
                         org_name = hiring_org.get("name", "N/A") if isinstance(hiring_org, dict) else str(hiring_org or "N/A")
@@ -497,6 +506,10 @@ class WebshareScrapper:
                         item["_scraped_url"] = url
                         item["actual_apply_url"] = actual_apply
                         results.append(item)
+                        try:
+                            db_manager.save_guest_job(url, item, actual_apply)
+                        except Exception:
+                            pass
                     current_job = ld_items[0] if ld_items else None
                     log(f"    [+] Saved {len(ld_items)} application/ld+json object(s)")
                 else:
@@ -506,6 +519,10 @@ class WebshareScrapper:
                     }
                     results.append(minimal_job)
                     current_job = minimal_job
+                    try:
+                        db_manager.save_guest_job(url, minimal_job, actual_apply)
+                    except Exception:
+                        pass
                     log("    [-] No application/ld+json found, recorded basic metadata.")
 
                 # Periodically save incremental progress so data is not lost
@@ -526,11 +543,90 @@ class WebshareScrapper:
                 wait_time = random.uniform(*delay_range)
                 await asyncio.sleep(wait_time)
 
+        stats = db_manager.get_job_stats()
         log(f"\n{'='*70}")
-        log(f"[✓] Completed! Successfully scraped {len(results)} job schema(s).")
-        log(f"[✓] Saved results to: {os.path.abspath(output_file)}")
+        log(f"[✓] Stage 1 Completed! Successfully scraped {len(results)} job schema(s).")
+        log(f"[✓] Saved to JSON: {os.path.abspath(output_file)}")
+        log(f"[✓] Database Status: Total={stats['total']} | Ready={stats['completed']} | Pending Apply={stats['pending_apply']}")
         log(f"{'='*70}")
         return results
+
+    async def enrich_apply_links_batch(
+        self,
+        urls: Optional[List[str]] = None,
+        delay_range: tuple = (1.0, 2.5),
+        on_log: Optional[Any] = None,
+        on_progress: Optional[Any] = None,
+        stop_event: Optional[Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Stage 2 (Logged-in Enrichment):
+        Visits job URLs that need an apply link using the current (logged-in) browser profile,
+        extracts the unmasked 'Apply on Company Site' link, and updates the SQLite database.
+        """
+        def log(msg: str):
+            print(msg)
+            if on_log:
+                try:
+                    on_log(msg)
+                except Exception:
+                    pass
+
+        if urls is None or len(urls) == 0:
+            urls = db_manager.get_pending_apply_urls()
+
+        total = len(urls)
+        log(f"\n{'='*70}")
+        log(f"[*] Stage 2: Enriching Apply Links for {total} pending job(s)")
+        log(f"[*] Profile: {os.path.basename(self.user_data_dir)}")
+        log(f"{'='*70}")
+
+        if total == 0:
+            log("[*] No pending jobs requiring an apply link. Everything is up to date!")
+            return []
+
+        enriched = []
+        for index, url in enumerate(urls, start=1):
+            if stop_event and stop_event.is_set():
+                log("\n[!] Stage 2 stopped by user request.")
+                break
+
+            url = url.strip()
+            if not url or url.startswith("#"):
+                continue
+
+            log(f"\n[{index}/{total}] Enriching: {url}")
+            actual_apply = None
+            try:
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                actual_apply = await self.extract_apply_link()
+
+                if actual_apply:
+                    db_manager.update_job_apply_url(url, actual_apply)
+                    log(f"    [✔] Successfully captured Apply Link: {actual_apply}")
+                    enriched.append({"url": url, "actual_apply_url": actual_apply})
+                else:
+                    log(f"    [✖] Could not find external apply link (may still require sign-in or expired).")
+
+            except Exception as e:
+                log(f"    [!] Error visiting {url}: {e}")
+
+            if on_progress:
+                try:
+                    on_progress(index, total, {"url": url, "actual_apply_url": actual_apply})
+                except Exception:
+                    pass
+
+            # Polite delay between page requests
+            if index < total and not (stop_event and stop_event.is_set()):
+                await asyncio.sleep(random.uniform(*delay_range))
+
+        stats = db_manager.get_job_stats()
+        log(f"\n{'='*70}")
+        log(f"[✓] Stage 2 Complete! Updated {len(enriched)} apply links.")
+        log(f"[✓] Database Status: Total={stats['total']} | Ready={stats['completed']} | Pending Apply={stats['pending_apply']}")
+        log(f"{'='*70}")
+        return enriched
 
     async def wait_until_closed(self):
         """
@@ -605,6 +701,19 @@ def parse_cli_args():
         help="Path to an unpacked Chrome extension folder (can be specified multiple times)"
     )
     parser.add_argument(
+        "--stage",
+        choices=["all", "guest", "apply"],
+        default="guest",
+        help="Pipeline stage: 'guest' (scrape job data), 'apply' (enrich apply links with logged-in profile), or 'all'"
+    )
+    parser.add_argument(
+        "--export",
+        nargs="?",
+        const="exported_jobs.json",
+        default=None,
+        help="Export completed jobs from database to a clean JSON file and exit"
+    )
+    parser.add_argument(
         "--skip-ip-check",
         action="store_true",
         help="Skip the initial proxy IP verification check"
@@ -670,10 +779,16 @@ async def main():
             await scrapper.close()
         return
 
-    # Mode 2: Batch scraping job URLs from urls-file
-    job_urls = load_job_urls(cli_args.urls_file)
-    print(f"[*] Loaded {len(job_urls)} URL(s) from '{cli_args.urls_file}'.")
-    
+    # Mode 2: Quick export from database
+    if cli_args.export:
+        export_file = cli_args.export
+        count = db_manager.export_jobs_to_json(filepath=export_file)
+        stats = db_manager.get_job_stats()
+        print(f"[✓] Exported {count} completed job(s) to: {os.path.abspath(export_file)}")
+        print(f"[✓] Database Stats: Total={stats['total']} | Ready={stats['completed']} | Pending Apply={stats['pending_apply']}")
+        return
+
+    # Mode 3: Batch scraping (Stage 1 Guest / Stage 2 Apply / All)
     try:
         await scrapper.start()
         
@@ -681,11 +796,17 @@ async def main():
         if not cli_args.skip_ip_check:
             await scrapper.verify_proxy_ip()
         
-        # Scrape application/ld+json and apply links for each job URL
-        await scrapper.scrape_jobs_batch(
-            urls=job_urls,
-            output_file=cli_args.output
-        )
+        if cli_args.stage in ["guest", "all"]:
+            job_urls = load_job_urls(cli_args.urls_file)
+            print(f"[*] [Stage 1: Guest] Loaded {len(job_urls)} URL(s) from '{cli_args.urls_file}'.")
+            await scrapper.scrape_jobs_batch(
+                urls=job_urls,
+                output_file=cli_args.output
+            )
+
+        if cli_args.stage in ["apply", "all"]:
+            print(f"\n[*] [Stage 2: Logged-in Enrichment] Checking pending jobs in database...")
+            await scrapper.enrich_apply_links_batch()
 
         # Keep browser open if user is running headfully to inspect
         if not cli_args.headless:
