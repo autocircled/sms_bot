@@ -411,8 +411,8 @@ class ScraperDesktopApp(ctk.CTk):
         preset_frame.grid(row=1, column=1, sticky="w", padx=10, pady=(0, 12))
 
         presets = [
-            ("DinJob Login", "https://www.dinjob.com/"),
-            ("Chrome Web Store", "https://chromewebstore.google.com"),
+            ("DinJob", "https://www.dinjob.com/"),
+            ("LinkedIn", "https://linkedin.com"),
             ("Check IP", "https://ipv4.webshare.io/"),
             ("Google", "https://google.com"),
         ]
@@ -988,7 +988,7 @@ class ScraperDesktopApp(ctk.CTk):
             target=self._run_manual_browser_thread,
             args=(target_url, browser_type, profile, ext_list),
             daemon=True
-        )
+        ).start()
 
     def _run_manual_browser_thread(self, target_url, browser_type, profile, ext_list):
         loop = asyncio.new_event_loop()
@@ -1001,6 +1001,7 @@ class ScraperDesktopApp(ctk.CTk):
             extensions=ext_list
         )
 
+        error_msg = None
         try:
             loop.run_until_complete(scrapper.start())
             if not self.skip_ip_check.get():
@@ -1010,6 +1011,7 @@ class ScraperDesktopApp(ctk.CTk):
             loop.run_until_complete(scrapper.wait_until_closed())
 
         except Exception as e:
+            error_msg = str(e)
             print(f"[!] Manual Browser Error: {e}")
         finally:
             try:
@@ -1021,7 +1023,11 @@ class ScraperDesktopApp(ctk.CTk):
             def _reset():
                 self.manual_browser_running = False
                 self.btn_launch_manual.configure(state="normal")
-                self.manual_status_label.configure(text="Status: Browser closed. Session saved.", text_color="gray")
+                if error_msg:
+                    self.manual_status_label.configure(text=f"Status: Error launching browser ({error_msg[:45]}...)", text_color="#EF5350")
+                    messagebox.showerror("Browser Launch Error", f"Failed to launch manual browser:\n\n{error_msg}")
+                else:
+                    self.manual_status_label.configure(text="Status: Browser closed. Session saved.", text_color="gray")
             self.after(0, _reset)
 
     # =========================================================================
